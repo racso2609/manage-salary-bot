@@ -10,7 +10,8 @@
      "typescript": "^5"
    },
    "scripts": {
-     "start": "bun run index.ts"
+     "start": "bun run index.ts",
+     "server": "bun run index.ts"
    },
   "dependencies": {
     "@binance/c2c": "^4.1.1",
