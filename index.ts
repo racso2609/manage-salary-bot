@@ -26,6 +26,13 @@ export const InOutRecord = z.object({
   externalId: z.string().optional(), // Unique ID prefixed with 'BN-'
   date: z.date(), // Transaction date
 
+  secondaryAmount: z
+    .preprocess((a) => BigInt(a?.toString() || 0), z.bigint())
+    .optional(),
+  secondaryCurrency: z
+    .preprocess((a) => a?.toString().toUpperCase(), z.string())
+    .optional(),
+
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });
@@ -71,6 +78,8 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
     tag,
     externalId: `BN-${order.orderNumber}`,
     date,
+    secondaryAmount: order.fiatAmount,
+    secondaryCurrency: order.fiat,
   };
 }
 
@@ -89,9 +98,7 @@ async function getP2POrders(): Promise<{
       : undefined;
     const res = await c2cClient.restAPI.getC2CTradeHistory({ startTimestamp });
     const data = await res.data();
-    console.log("P2P Orders:", data);
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
-    console.log("Parsed Records:", records);
     return { data: data.data || [], records };
   } catch (error) {
     console.error("Error getting P2P orders:", error);
@@ -104,23 +111,23 @@ async function getP2POrders(): Promise<{
  * @param records - Array of InOutRecord to send.
  */
 async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
-  for (const record of records) {
-    try {
-      const response = await fetch(`${process.env.HOST}/api/records`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(record),
-      });
-      if (!response.ok) {
-        console.error(`Failed to send record: ${response.statusText}`);
-      }
-    } catch (error) {
-      console.error("Error sending record:", error);
-    }
-  }
+  // for (const record of records) {
+  //   try {
+  //     const response = await fetch(`${process.env.HOST}/api/records`, {
+  //       method: "POST",
+  //       headers: {
+  //         Authorization: `Bearer ${process.env.API_KEY}`,
+  //         "Content-Type": "application/json",
+  //       },
+  //       body: JSON.stringify(record),
+  //     });
+  //     if (!response.ok) {
+  //       console.error(`Failed to send record: ${response.statusText}`);
+  //     }
+  //   } catch (error) {
+  //     console.error("Error sending record:", error);
+  //   }
+  // }
 }
 
 /**
@@ -128,15 +135,18 @@ async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
  * @param transaction - The raw transaction data from Binance Pay API.
  * @returns Parsed InOutRecord.
  */
-function parsePayTransactionToRecord(transaction: any): z.infer<typeof InOutRecord> {
+function parsePayTransactionToRecord(
+  transaction: any,
+): z.infer<typeof InOutRecord> {
   const amount = transaction.amount;
   // Placeholder: Determine type based on if you are receiver or payer
   // For PAY, if receiverInfo has binanceId, assume 'IN', else 'OUT'
   const isReceiver = transaction.receiverInfo?.binanceId; // Placeholder check
-  const type = isReceiver ? 'IN' : 'OUT';
-  const currency = transaction.currency || 'UNKNOWN';
-  const user = transaction.payerInfo?.name || transaction.receiverInfo?.name || 'Unknown';
-  const description = `Binance Pay: ${transaction.payerInfo?.name || 'Unknown'} to ${transaction.receiverInfo?.name || 'Unknown'}`;
+  const type = isReceiver ? "IN" : "OUT";
+  const currency = transaction.currency || "UNKNOWN";
+  const user =
+    transaction.payerInfo?.name || transaction.receiverInfo?.name || "Unknown";
+  const description = `Binance Pay: ${transaction.payerInfo?.name || "Unknown"} to ${transaction.receiverInfo?.name || "Unknown"}`;
   const tag = null;
   const date = new Date(transaction.createTime);
 
@@ -165,9 +175,7 @@ async function getPayTransactions(): Promise<z.infer<typeof InOutRecord>[]> {
     // Note: @binance/connector may not have payTransactions; if not, use direct axios call
     const res = await (spotClient as any).payTransactions({ startTime });
     const transactions = res.data;
-    console.log("Pay Transactions:", transactions);
     const records = transactions.map(parsePayTransactionToRecord);
-    console.log("Parsed Pay Records:", records);
     return records;
   } catch (error) {
     console.error("Error getting pay transactions:", error);
@@ -213,9 +221,7 @@ async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
       : undefined;
     const res = await spotClient.depositHistory({ startTime });
     const deposits = res.data;
-    console.log("Deposits:", deposits);
     const records = deposits.map(parseDepositToRecord);
-    console.log("Parsed Deposit Records:", records);
     return records;
   } catch (error) {
     console.error("Error getting deposits:", error);
@@ -229,7 +235,6 @@ async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
 async function handleIncomingActions() {
   // Poll for new orders every minute
   setInterval(async () => {
-    console.log("Checking for incoming actions...");
     const p2p = await getP2POrders();
     await sendRecords(p2p.records);
   }, 60000); // 1 minute
@@ -237,7 +242,6 @@ async function handleIncomingActions() {
 
 // Main function
 async function main() {
-  console.log("Starting manage salary bot...");
   const p2p = await getP2POrders();
   await sendRecords(p2p.records);
 
