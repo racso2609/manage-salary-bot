@@ -7,28 +7,27 @@ import { config } from "dotenv";
 import { C2C } from "@binance/c2c";
 import { Spot } from "@binance/connector";
 import { z } from "zod";
+import { createHmac } from "crypto";
 
 config();
 
-const IN_OUT_RECORD_TYPES = ["IN", "OUT"] as const;
+const IN_OUT_RECORD_TYPES = ["in", "out"] as const;
 
 /**
  * Zod schema for In/Out records parsed from P2P orders.
  * Represents transactions with amount, type, currency, etc.
  */
 export const InOutRecord = z.object({
-  amount: z.preprocess((a) => BigInt(a?.toString() || 0), z.bigint()), // Crypto amount as BigInt
-  type: z.enum(IN_OUT_RECORD_TYPES), // 'IN' for buy, 'OUT' for sell
+  amount: z.preprocess((a) => BigInt(a?.toString() || 0), z.string()), // Amount as string (multiplied by 100)
+  type: z.enum(IN_OUT_RECORD_TYPES), // 'in' for buy, 'out' for sell
   currency: z.preprocess((a) => a?.toString().toUpperCase(), z.string()), // Asset like 'USDT'
-  user: z.unknown(), // Counterpart nickname
+  // user: z.unknown(), // Counterpart nickname
   description: z.string(), // Description of the transaction
   tag: z.unknown(), // Additional tags
   externalId: z.string().optional(), // Unique ID prefixed with 'BN-'
-  date: z.date(), // Transaction date
+  date: z.string(), // Transaction date as ISO string
 
-  secondaryAmount: z
-    .preprocess((a) => BigInt(a?.toString() || 0), z.bigint())
-    .optional(),
+  secondaryAmount: z.string().optional(),
   secondaryCurrency: z
     .preprocess((a) => a?.toString().toUpperCase(), z.string())
     .optional(),
@@ -61,24 +60,25 @@ const spotClient = new Spot(
  * @returns Parsed InOutRecord.
  */
 function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
-  const amount = order.amount; // already string, preprocess will handle
-  const type = order.tradeType === "BUY" ? "IN" : "OUT";
+  const amount = Math.round(parseFloat(order.amount) * 100).toString(); // multiply by 100 for backend bigint handling
+  const type = order.tradeType === "BUY" ? "in" : "out";
   const currency = order.asset;
   const user = order.counterPartNickName;
   const description = `P2P ${order.tradeType} ${order.asset} for ${order.fiat}`;
   const tag = null; // unknown
-  const date = new Date(order.createTime);
+  const date = new Date(order.createTime).toISOString();
 
   return {
     amount,
     type,
     currency,
-    user,
     description,
     tag,
     externalId: `BN-${order.orderNumber}`,
     date,
-    secondaryAmount: order.fiatAmount,
+    secondaryAmount: order.fiatAmount
+      ? Math.round(parseFloat(order.fiatAmount) * 100).toString()
+      : undefined,
     secondaryCurrency: order.fiat,
   };
 }
@@ -107,27 +107,65 @@ async function getP2POrders(): Promise<{
 }
 
 /**
- * Sends parsed records to the configured API endpoint.
+ * Fetches existing externalIds from the API to avoid duplicates.
+ * @returns Set of existing externalIds.
+ */
+async function getExistingExternalIds(): Promise<Set<string>> {
+  try {
+    const response = await fetch(`${process.env.HOST}/api/records`, {
+      method: "GET",
+      headers: {
+        ["x-api-key"]: `${process.env.API_KEY}`,
+      },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      // Assuming the API returns records with externalId field
+      return new Set(
+        data.map((record: any) => record.externalId).filter(Boolean),
+      );
+    }
+  } catch (error) {
+    console.error("Error fetching existing records:", error);
+  }
+  return new Set();
+}
+
+/**
+ * Sends parsed records to the configured API endpoint, filtering out duplicates.
  * @param records - Array of InOutRecord to send.
  */
 async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
-  // for (const record of records) {
-  //   try {
-  //     const response = await fetch(`${process.env.HOST}/api/records`, {
-  //       method: "POST",
-  //       headers: {
-  //         Authorization: `Bearer ${process.env.API_KEY}`,
-  //         "Content-Type": "application/json",
-  //       },
-  //       body: JSON.stringify(record),
-  //     });
-  //     if (!response.ok) {
-  //       console.error(`Failed to send record: ${response.statusText}`);
-  //     }
-  //   } catch (error) {
-  //     console.error("Error sending record:", error);
-  //   }
-  // }
+  try {
+    // Get existing externalIds to filter duplicates
+    const existingIds = await getExistingExternalIds();
+    const newRecords = records.filter(
+      (record) => record.externalId && !existingIds.has(record.externalId),
+    );
+
+    if (newRecords.length === 0) {
+      console.log("No new records to send");
+      return;
+    }
+
+    console.log(
+      `Sending ${newRecords.length} new records (filtered ${records.length - newRecords.length} duplicates)`,
+    );
+
+    const response = await fetch(`${process.env.HOST}/api/records/bulk`, {
+      method: "POST",
+      headers: {
+        ["x-api-key"]: `${process.env.API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ records: newRecords }),
+    });
+    if (!response.ok) {
+      console.error(`Failed to send record: ${await response.clone().text()}`);
+    }
+  } catch (error) {
+    console.error("Error sending record:", error);
+  }
 }
 
 /**
@@ -138,23 +176,30 @@ async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
 function parsePayTransactionToRecord(
   transaction: any,
 ): z.infer<typeof InOutRecord> {
-  const amount = transaction.amount;
-  // Placeholder: Determine type based on if you are receiver or payer
-  // For PAY, if receiverInfo has binanceId, assume 'IN', else 'OUT'
-  const isReceiver = transaction.receiverInfo?.binanceId; // Placeholder check
-  const type = isReceiver ? "IN" : "OUT";
-  const currency = transaction.currency || "UNKNOWN";
+  const amountStr = transaction.amount;
+  const amount = Math.round(
+    parseFloat(amountStr.startsWith("-") ? amountStr.substring(1) : amountStr) *
+      100,
+  ).toString();
+  // If amount is negative, we sent money (out), else we received (in)
+  const type = amountStr.startsWith("-") ? "out" : "in";
+  const currency = transaction.currency;
   const user =
-    transaction.payerInfo?.name || transaction.receiverInfo?.name || "Unknown";
-  const description = `Binance Pay: ${transaction.payerInfo?.name || "Unknown"} to ${transaction.receiverInfo?.name || "Unknown"}`;
+    type === "out"
+      ? transaction.receiverInfo?.name ||
+        transaction.receiverInfo?.email ||
+        "Unknown"
+      : transaction.payerInfo?.name ||
+        transaction.payerInfo?.email ||
+        "Unknown";
+  const description = `Binance Pay ${type === "out" ? "to" : "from"} ${user}`;
   const tag = null;
-  const date = new Date(transaction.createTime);
+  const date = new Date(transaction.transactionTime).toISOString();
 
   return {
     amount,
     type,
     currency,
-    user,
     description,
     tag,
     externalId: `PAY-${transaction.transactionId}`,
@@ -172,9 +217,40 @@ async function getPayTransactions(): Promise<z.infer<typeof InOutRecord>[]> {
     const startTime = process.env.START_DATE
       ? Date.parse(process.env.START_DATE)
       : undefined;
-    // Note: @binance/connector may not have payTransactions; if not, use direct axios call
-    const res = await (spotClient as any).payTransactions({ startTime });
-    const transactions = res.data;
+
+    // Direct API call to Binance Pay since @binance/connector doesn't have payTransactions
+    const timestamp = Date.now();
+    const queryString = new URLSearchParams({
+      timestamp: timestamp.toString(),
+      ...(startTime && { startTime: startTime.toString() }),
+    }).toString();
+
+    const signature = createHmac("sha256", process.env.BINANCE_API_SECRET!)
+      .update(queryString)
+      .digest("hex");
+
+    const response = await fetch(
+      `https://api.binance.com/sapi/v1/pay/transactions?${queryString}&signature=${signature}`,
+      {
+        method: "GET",
+        headers: {
+          "X-MBX-APIKEY": process.env.BINANCE_API_KEY!,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(
+        `Binance API error: ${response.status} ${response.statusText} - ${responseText}`,
+      );
+    }
+
+    const data = (await response.json()) as any;
+    if (data.code !== "000000") {
+      throw new Error(`Binance API error: ${data.code} ${data.message}`);
+    }
+    const transactions = data.data || [];
     const records = transactions.map(parsePayTransactionToRecord);
     return records;
   } catch (error) {
@@ -189,19 +265,17 @@ async function getPayTransactions(): Promise<z.infer<typeof InOutRecord>[]> {
  * @returns Parsed InOutRecord.
  */
 function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
-  const amount = deposit.amount;
-  const type = "IN" as const;
-  const currency = deposit.asset;
-  const user = null; // Deposits don't have counterpart
+  const amount = Math.round(parseFloat(deposit.amount) * 100).toString();
+  const type = "in" as const;
+  const currency = deposit.asset || "USD";
   const description = `Deposit ${deposit.asset} to Binance`;
   const tag = null;
-  const date = new Date(deposit.insertTime);
+  const date = new Date(deposit.insertTime).toISOString();
 
   return {
     amount,
     type,
     currency,
-    user,
     description,
     tag,
     externalId: `BN-${deposit.txId}`,
@@ -229,14 +303,18 @@ async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
   }
 }
 
+const getOrders = () => {
+  return Promise.all([getP2POrders(), getDeposits(), getPayTransactions()]);
+};
+
 /**
  * Polls for incoming actions (new orders) every minute.
  */
 async function handleIncomingActions() {
   // Poll for new orders every minute
   setInterval(async () => {
-    const p2p = await getP2POrders();
-    await sendRecords(p2p.records);
+    const orders = await getOrders();
+    await sendRecords(orders.flatMap((o) => ("records" in o ? o.records : o)));
   }, 60000); // 1 minute
 }
 
@@ -246,11 +324,11 @@ async function main() {
   await sendRecords(p2p.records);
 
   const deposits = await getDeposits();
+  console.log(deposits);
   await sendRecords(deposits);
 
   const pays = await getPayTransactions();
   await sendRecords(pays);
-
   handleIncomingActions();
 }
 
