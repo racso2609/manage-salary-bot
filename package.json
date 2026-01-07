@@ -6,10 +6,15 @@
   "devDependencies": {
     "@types/bun": "latest"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
+   "peerDependencies": {
+     "typescript": "^5"
+   },
+   "scripts": {
+     "start": "bun run index.ts"
+   },
   "dependencies": {
-    "@binance/connector": "^3.6.1"
+    "@binance/c2c": "^4.1.1",
+    "@binance/connector": "^3.6.1",
+    "dotenv": "^17.2.3"
   }
 }
