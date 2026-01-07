@@ -1,3 +1,8 @@
+/**
+ * Manage Salary Bot - Handles P2P orders from Binance and processes them into records.
+ * Polls for new orders and manages payments.
+ */
+
 import { config } from "dotenv";
 import { C2C } from "@binance/c2c";
 import { z } from "zod";
@@ -6,20 +11,27 @@ config();
 
 const IN_OUT_RECORD_TYPES = ["IN", "OUT"] as const;
 
+/**
+ * Zod schema for In/Out records parsed from P2P orders.
+ * Represents transactions with amount, type, currency, etc.
+ */
 export const InOutRecord = z.object({
-  // amount incoming if currency is usd 2 zeros for decimals
-  amount: z.preprocess((a) => BigInt(a?.toString() || 0), z.bigint()),
-  type: z.enum(IN_OUT_RECORD_TYPES),
-  currency: z.preprocess((a) => a?.toString().toUpperCase(), z.string()),
-  description: z.string(),
-  tag: z.unknown(),
-  externalId: z.string().optional(),
-  date: z.date(),
+  amount: z.preprocess((a) => BigInt(a?.toString() || 0), z.bigint()), // Crypto amount as BigInt
+  type: z.enum(IN_OUT_RECORD_TYPES), // 'IN' for buy, 'OUT' for sell
+  currency: z.preprocess((a) => a?.toString().toUpperCase(), z.string()), // Asset like 'USDT'
+  user: z.unknown(), // Counterpart nickname
+  description: z.string(), // Description of the transaction
+  tag: z.unknown(), // Additional tags
+  externalId: z.string().optional(), // Unique ID prefixed with 'BN-'
+  date: z.date(), // Transaction date
 
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });
 
+/**
+ * Binance C2C client for P2P API interactions.
+ */
 const client = new C2C({
   configurationRestAPI: {
     apiKey: process.env.BINANCE_API_KEY!,
@@ -27,6 +39,11 @@ const client = new C2C({
   },
 });
 
+/**
+ * Parses a Binance P2P order into an InOutRecord.
+ * @param order - The raw order data from Binance API.
+ * @returns Parsed InOutRecord.
+ */
 function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
   const amount = order.amount; // already string, preprocess will handle
   const type = order.tradeType === "BUY" ? "IN" : "OUT";
@@ -40,17 +57,24 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
     amount,
     type,
     currency,
-    // BN = binance
-    externalId: `BN-${order.orderNumber}`,
+    user,
     description,
     tag,
+    externalId: `BN-${order.orderNumber}`,
     date,
   };
 }
 
+/**
+ * Fetches P2P trade history from Binance, filtered by START_DATE if set.
+ * Parses orders into InOutRecord format.
+ * @returns Object with raw data and parsed records.
+ */
 async function getP2POrders() {
   try {
-    const startTimestamp = process.env.START_DATE ? Date.parse(process.env.START_DATE) : undefined;
+    const startTimestamp = process.env.START_DATE
+      ? Date.parse(process.env.START_DATE)
+      : undefined;
     const res = await client.restAPI.getC2CTradeHistory({ startTimestamp });
     const data = await res.data();
     console.log("P2P Orders:", data);
@@ -62,6 +86,10 @@ async function getP2POrders() {
   }
 }
 
+/**
+ * Processes paid orders by checking for BUYER_PAYED status and releasing crypto.
+ * TODO: Implement actual crypto release once SDK supports it.
+ */
 async function payOrders() {
   try {
     const orders = await getP2POrders();
@@ -83,6 +111,9 @@ async function payOrders() {
   }
 }
 
+/**
+ * Polls for incoming actions (new orders) every minute.
+ */
 async function handleIncomingActions() {
   // Poll for new orders every minute
   setInterval(async () => {
