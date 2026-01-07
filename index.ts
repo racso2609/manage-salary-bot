@@ -5,6 +5,7 @@
 
 import { config } from "dotenv";
 import { C2C } from "@binance/c2c";
+import { Spot } from "@binance/connector";
 import { z } from "zod";
 
 config();
@@ -32,12 +33,17 @@ export const InOutRecord = z.object({
 /**
  * Binance C2C client for P2P API interactions.
  */
-const client = new C2C({
+const c2cClient = new C2C({
   configurationRestAPI: {
     apiKey: process.env.BINANCE_API_KEY!,
     apiSecret: process.env.BINANCE_API_SECRET!,
   },
 });
+
+/**
+ * Binance Spot client for deposit/withdrawal API interactions.
+ */
+const spotClient = new Spot(process.env.BINANCE_API_KEY!, process.env.BINANCE_API_SECRET!);
 
 /**
  * Parses a Binance P2P order into an InOutRecord.
@@ -75,7 +81,7 @@ async function getP2POrders() {
     const startTimestamp = process.env.START_DATE
       ? Date.parse(process.env.START_DATE)
       : undefined;
-    const res = await client.restAPI.getC2CTradeHistory({ startTimestamp });
+    const res = await c2cClient.restAPI.getC2CTradeHistory({ startTimestamp });
     const data = await res.data();
     console.log("P2P Orders:", data);
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
@@ -83,6 +89,53 @@ async function getP2POrders() {
     return { ...data, records };
   } catch (error) {
     console.error("Error getting P2P orders:", error);
+  }
+}
+
+/**
+ * Parses a Binance deposit into an InOutRecord.
+ * @param deposit - The raw deposit data from Binance API.
+ * @returns Parsed InOutRecord.
+ */
+function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
+  const amount = deposit.amount;
+  const type = 'IN' as const;
+  const currency = deposit.asset;
+  const user = null; // Deposits don't have counterpart
+  const description = `Deposit ${deposit.asset} to Binance`;
+  const tag = null;
+  const date = new Date(deposit.insertTime);
+
+  return {
+    amount,
+    type,
+    currency,
+    user,
+    description,
+    tag,
+    externalId: `DEP-${deposit.txId}`,
+    date,
+  };
+}
+
+/**
+ * Fetches deposit history from Binance, filtered by START_DATE if set.
+ * Parses deposits into InOutRecord format.
+ * @returns Array of parsed records.
+ */
+async function getDeposits() {
+  try {
+    const startTime = process.env.START_DATE
+      ? Date.parse(process.env.START_DATE)
+      : undefined;
+    const res = await spotClient.depositHistory({ startTime });
+    const deposits = res.data;
+    console.log("Deposits:", deposits);
+    const records = deposits.map(parseDepositToRecord);
+    console.log("Parsed Deposit Records:", records);
+    return records;
+  } catch (error) {
+    console.error("Error getting deposits:", error);
   }
 }
 
@@ -126,6 +179,7 @@ async function handleIncomingActions() {
 async function main() {
   console.log("Starting manage salary bot...");
   await getP2POrders();
+  await getDeposits();
   handleIncomingActions();
 }
 
