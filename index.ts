@@ -74,9 +74,9 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
 /**
  * Fetches P2P trade history from Binance, filtered by START_DATE if set.
  * Parses orders into InOutRecord format.
- * @returns Object with raw data and parsed records.
+ * @returns Object with raw orders and parsed records.
  */
-async function getP2POrders() {
+async function getP2POrders(): Promise<{ data: any[], records: z.infer<typeof InOutRecord>[] }> {
   try {
     const startTimestamp = process.env.START_DATE
       ? Date.parse(process.env.START_DATE)
@@ -86,10 +86,10 @@ async function getP2POrders() {
     console.log("P2P Orders:", data);
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
     console.log("Parsed Records:", records);
-    await sendRecords(records);
-    return { ...data, records };
+    return { data: data.data || [], records };
   } catch (error) {
     console.error("Error getting P2P orders:", error);
+    return { data: [], records: [] };
   }
 }
 
@@ -148,7 +148,7 @@ function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
  * Parses deposits into InOutRecord format.
  * @returns Array of parsed records.
  */
-async function getDeposits() {
+async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
   try {
     const startTime = process.env.START_DATE
       ? Date.parse(process.env.START_DATE)
@@ -158,35 +158,28 @@ async function getDeposits() {
     console.log("Deposits:", deposits);
     const records = deposits.map(parseDepositToRecord);
     console.log("Parsed Deposit Records:", records);
-    await sendRecords(records);
     return records;
   } catch (error) {
     console.error("Error getting deposits:", error);
+    return [];
   }
 }
 
 /**
  * Processes paid orders by checking for BUYER_PAYED status and releasing crypto.
- * TODO: Implement actual crypto release once SDK supports it.
+ * @param rawOrders - Array of raw order data.
  */
-async function payOrders() {
-  try {
-    const orders = await getP2POrders();
-    if (!orders || !orders.data) return;
-
-    for (const order of orders.data) {
-      if (
-        order.orderStatus === "BUYER_PAYED" &&
-        order.advertisementRole === "MAKER"
-      ) {
-        // TODO: Implement release crypto logic once SDK supports changeOrderMatchStatus
-        console.log(
-          `Need to release crypto for paid order ${order.orderNumber}`,
-        );
-      }
+async function payOrders(rawOrders: any[]) {
+  for (const order of rawOrders) {
+    if (
+      order.orderStatus === "BUYER_PAYED" &&
+      order.advertisementRole === "MAKER"
+    ) {
+      // TODO: Implement release crypto logic once SDK supports changeOrderMatchStatus
+      console.log(
+        `Need to release crypto for paid order ${order.orderNumber}`,
+      );
     }
-  } catch (error) {
-    console.error("Error processing orders:", error);
   }
 }
 
@@ -197,15 +190,22 @@ async function handleIncomingActions() {
   // Poll for new orders every minute
   setInterval(async () => {
     console.log("Checking for incoming actions...");
-    await payOrders();
+    const p2p = await getP2POrders();
+    await sendRecords(p2p.records);
+    payOrders(p2p.data);
   }, 60000); // 1 minute
 }
 
 // Main function
 async function main() {
   console.log("Starting manage salary bot...");
-  await getP2POrders();
-  await getDeposits();
+  const p2p = await getP2POrders();
+  await sendRecords(p2p.records);
+  payOrders(p2p.data);
+
+  const deposits = await getDeposits();
+  await sendRecords(deposits);
+
   handleIncomingActions();
 }
 
