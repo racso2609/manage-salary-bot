@@ -86,9 +86,34 @@ async function getP2POrders() {
     console.log("P2P Orders:", data);
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
     console.log("Parsed Records:", records);
+    await sendRecords(records);
     return { ...data, records };
   } catch (error) {
     console.error("Error getting P2P orders:", error);
+  }
+}
+
+/**
+ * Sends parsed records to the configured API endpoint.
+ * @param records - Array of InOutRecord to send.
+ */
+async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
+  for (const record of records) {
+    try {
+      const response = await fetch(`${process.env.HOST}/api/records`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(record)
+      });
+      if (!response.ok) {
+        console.error(`Failed to send record: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Error sending record:', error);
+    }
   }
 }
 
@@ -133,6 +158,7 @@ async function getDeposits() {
     console.log("Deposits:", deposits);
     const records = deposits.map(parseDepositToRecord);
     console.log("Parsed Deposit Records:", records);
+    await sendRecords(records);
     return records;
   } catch (error) {
     console.error("Error getting deposits:", error);
