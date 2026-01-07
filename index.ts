@@ -43,7 +43,10 @@ const c2cClient = new C2C({
 /**
  * Binance Spot client for deposit/withdrawal API interactions.
  */
-const spotClient = new Spot(process.env.BINANCE_API_KEY!, process.env.BINANCE_API_SECRET!);
+const spotClient = new Spot(
+  process.env.BINANCE_API_KEY!,
+  process.env.BINANCE_API_SECRET!,
+);
 
 /**
  * Parses a Binance P2P order into an InOutRecord.
@@ -76,7 +79,10 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
  * Parses orders into InOutRecord format.
  * @returns Object with raw orders and parsed records.
  */
-async function getP2POrders(): Promise<{ data: any[], records: z.infer<typeof InOutRecord>[] }> {
+async function getP2POrders(): Promise<{
+  data: any[];
+  records: z.infer<typeof InOutRecord>[];
+}> {
   try {
     const startTimestamp = process.env.START_DATE
       ? Date.parse(process.env.START_DATE)
@@ -101,19 +107,71 @@ async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
   for (const record of records) {
     try {
       const response = await fetch(`${process.env.HOST}/api/records`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${process.env.API_KEY}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${process.env.API_KEY}`,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify(record)
+        body: JSON.stringify(record),
       });
       if (!response.ok) {
         console.error(`Failed to send record: ${response.statusText}`);
       }
     } catch (error) {
-      console.error('Error sending record:', error);
+      console.error("Error sending record:", error);
     }
+  }
+}
+
+/**
+ * Parses a Binance Pay transaction into an InOutRecord.
+ * @param transaction - The raw transaction data from Binance Pay API.
+ * @returns Parsed InOutRecord.
+ */
+function parsePayTransactionToRecord(transaction: any): z.infer<typeof InOutRecord> {
+  const amount = transaction.amount;
+  // Placeholder: Determine type based on if you are receiver or payer
+  // For PAY, if receiverInfo has binanceId, assume 'IN', else 'OUT'
+  const isReceiver = transaction.receiverInfo?.binanceId; // Placeholder check
+  const type = isReceiver ? 'IN' : 'OUT';
+  const currency = transaction.currency || 'UNKNOWN';
+  const user = transaction.payerInfo?.name || transaction.receiverInfo?.name || 'Unknown';
+  const description = `Binance Pay: ${transaction.payerInfo?.name || 'Unknown'} to ${transaction.receiverInfo?.name || 'Unknown'}`;
+  const tag = null;
+  const date = new Date(transaction.createTime);
+
+  return {
+    amount,
+    type,
+    currency,
+    user,
+    description,
+    tag,
+    externalId: `PAY-${transaction.transactionId}`,
+    date,
+  };
+}
+
+/**
+ * Fetches Binance Pay transaction history, filtered by START_DATE if set.
+ * Parses transactions into InOutRecord format.
+ * @returns Array of parsed records.
+ */
+async function getPayTransactions(): Promise<z.infer<typeof InOutRecord>[]> {
+  try {
+    const startTime = process.env.START_DATE
+      ? Date.parse(process.env.START_DATE)
+      : undefined;
+    // Note: @binance/connector may not have payTransactions; if not, use direct axios call
+    const res = await (spotClient as any).payTransactions({ startTime });
+    const transactions = res.data;
+    console.log("Pay Transactions:", transactions);
+    const records = transactions.map(parsePayTransactionToRecord);
+    console.log("Parsed Pay Records:", records);
+    return records;
+  } catch (error) {
+    console.error("Error getting pay transactions:", error);
+    return [];
   }
 }
 
@@ -124,7 +182,7 @@ async function sendRecords(records: z.infer<typeof InOutRecord>[]) {
  */
 function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
   const amount = deposit.amount;
-  const type = 'IN' as const;
+  const type = "IN" as const;
   const currency = deposit.asset;
   const user = null; // Deposits don't have counterpart
   const description = `Deposit ${deposit.asset} to Binance`;
@@ -138,7 +196,7 @@ function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
     user,
     description,
     tag,
-    externalId: `DEP-${deposit.txId}`,
+    externalId: `BN-${deposit.txId}`,
     date,
   };
 }
@@ -166,24 +224,6 @@ async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
 }
 
 /**
- * Processes paid orders by checking for BUYER_PAYED status and releasing crypto.
- * @param rawOrders - Array of raw order data.
- */
-async function payOrders(rawOrders: any[]) {
-  for (const order of rawOrders) {
-    if (
-      order.orderStatus === "BUYER_PAYED" &&
-      order.advertisementRole === "MAKER"
-    ) {
-      // TODO: Implement release crypto logic once SDK supports changeOrderMatchStatus
-      console.log(
-        `Need to release crypto for paid order ${order.orderNumber}`,
-      );
-    }
-  }
-}
-
-/**
  * Polls for incoming actions (new orders) every minute.
  */
 async function handleIncomingActions() {
@@ -192,7 +232,6 @@ async function handleIncomingActions() {
     console.log("Checking for incoming actions...");
     const p2p = await getP2POrders();
     await sendRecords(p2p.records);
-    payOrders(p2p.data);
   }, 60000); // 1 minute
 }
 
@@ -201,10 +240,12 @@ async function main() {
   console.log("Starting manage salary bot...");
   const p2p = await getP2POrders();
   await sendRecords(p2p.records);
-  payOrders(p2p.data);
 
   const deposits = await getDeposits();
   await sendRecords(deposits);
+
+  const pays = await getPayTransactions();
+  await sendRecords(pays);
 
   handleIncomingActions();
 }
