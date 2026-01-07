@@ -4,16 +4,16 @@ import { z } from "zod";
 
 config();
 
-const IN_OUT_RECORD_TYPES = ['IN', 'OUT'] as const;
+const IN_OUT_RECORD_TYPES = ["IN", "OUT"] as const;
 
 export const InOutRecord = z.object({
   // amount incoming if currency is usd 2 zeros for decimals
   amount: z.preprocess((a) => BigInt(a?.toString() || 0), z.bigint()),
   type: z.enum(IN_OUT_RECORD_TYPES),
   currency: z.preprocess((a) => a?.toString().toUpperCase(), z.string()),
-  user: z.unknown(),
   description: z.string(),
   tag: z.unknown(),
+  externalId: z.string().optional(),
   date: z.date(),
 
   createdAt: z.date().optional(),
@@ -29,7 +29,7 @@ const client = new C2C({
 
 function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
   const amount = order.amount; // already string, preprocess will handle
-  const type = order.tradeType === 'BUY' ? 'IN' : 'OUT';
+  const type = order.tradeType === "BUY" ? "IN" : "OUT";
   const currency = order.asset;
   const user = order.counterPartNickName;
   const description = `P2P ${order.tradeType} ${order.asset} for ${order.fiat}`;
@@ -40,7 +40,8 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
     amount,
     type,
     currency,
-    user,
+    // BN = binance
+    externalId: `BN-${order.orderNumber}`,
     description,
     tag,
     date,
@@ -49,7 +50,8 @@ function parseOrderToRecord(order: any): z.infer<typeof InOutRecord> {
 
 async function getP2POrders() {
   try {
-    const res = await client.restAPI.getC2CTradeHistory();
+    const startTimestamp = process.env.START_DATE ? Date.parse(process.env.START_DATE) : undefined;
+    const res = await client.restAPI.getC2CTradeHistory({ startTimestamp });
     const data = await res.data();
     console.log("P2P Orders:", data);
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
@@ -97,4 +99,3 @@ async function main() {
 }
 
 main();
-
