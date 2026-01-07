@@ -8,5 +8,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@binance/connector": "^3.6.1"
   }
 }
