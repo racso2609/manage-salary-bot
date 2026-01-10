@@ -55,6 +55,14 @@ const spotClient = new Spot(
 );
 
 /**
+ * Global variable to track the last fetched timestamp for optimization.
+ * Initialized to START_DATE or Unix epoch if not set.
+ */
+let lastFetchedTimestamp: number = process.env.START_DATE
+  ? Date.parse(process.env.START_DATE)
+  : 0;
+
+/**
  * Parses a Binance P2P order into an InOutRecord.
  * @param order - The raw order data from Binance API.
  * @returns Parsed InOutRecord.
@@ -93,9 +101,7 @@ async function getP2POrders(): Promise<{
   records: z.infer<typeof InOutRecord>[];
 }> {
   try {
-    const startTimestamp = process.env.START_DATE
-      ? Date.parse(process.env.START_DATE)
-      : undefined;
+    const startTimestamp = lastFetchedTimestamp || undefined;
     const res = await c2cClient.restAPI.getC2CTradeHistory({ startTimestamp });
     const data = await res.data();
     const records = data.data ? data.data.map(parseOrderToRecord) : [];
@@ -214,9 +220,7 @@ function parsePayTransactionToRecord(
  */
 async function getPayTransactions(): Promise<z.infer<typeof InOutRecord>[]> {
   try {
-    const startTime = process.env.START_DATE
-      ? Date.parse(process.env.START_DATE)
-      : undefined;
+    const startTime = lastFetchedTimestamp || undefined;
 
     // Direct API call to Binance Pay since @binance/connector doesn't have payTransactions
     const timestamp = Date.now();
@@ -290,9 +294,7 @@ function parseDepositToRecord(deposit: any): z.infer<typeof InOutRecord> {
  */
 async function getDeposits(): Promise<z.infer<typeof InOutRecord>[]> {
   try {
-    const startTime = process.env.START_DATE
-      ? Date.parse(process.env.START_DATE)
-      : undefined;
+    const startTime = lastFetchedTimestamp || undefined;
     const res = await spotClient.depositHistory({ startTime });
     const deposits = res.data;
     const records = deposits.map(parseDepositToRecord);
@@ -314,7 +316,14 @@ async function handleIncomingActions() {
   // Poll for new orders every minute
   setInterval(async () => {
     const orders = await getOrders();
-    await sendRecords(orders.flatMap((o) => ("records" in o ? o.records : o)));
+    const allRecords = orders.flatMap((o) => ("records" in o ? o.records : o));
+    await sendRecords(allRecords);
+
+    // Update lastFetchedTimestamp to the latest timestamp from fetched data
+    if (allRecords.length > 0) {
+      const maxTimestamp = Math.max(...allRecords.map(r => Date.parse(r.date)));
+      lastFetchedTimestamp = maxTimestamp;
+    }
   }, 60000); // 1 minute
 }
 
@@ -329,6 +338,14 @@ async function main() {
 
   const pays = await getPayTransactions();
   await sendRecords(pays);
+
+  // Collect all records to update timestamp
+  const allRecords = [...p2p.records, ...deposits, ...pays];
+  if (allRecords.length > 0) {
+    const maxTimestamp = Math.max(...allRecords.map(r => Date.parse(r.date)));
+    lastFetchedTimestamp = maxTimestamp;
+  }
+
   // Note: handleIncomingActions() is not suitable for serverless due to execution limits
   // For continuous polling, consider using a different hosting platform
 }
