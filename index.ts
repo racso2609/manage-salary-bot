@@ -119,7 +119,7 @@ async function getExistingExternalIds(): Promise<Set<string>> {
       },
     });
     if (response.ok) {
-      const data = await response.json();
+      const data = await response.json() as any[];
       // Assuming the API returns records with externalId field
       return new Set(
         data.map((record: any) => record.externalId).filter(Boolean),
@@ -329,7 +329,20 @@ async function main() {
 
   const pays = await getPayTransactions();
   await sendRecords(pays);
-  handleIncomingActions();
+  // Note: handleIncomingActions() is not suitable for serverless due to execution limits
+  // For continuous polling, consider using a different hosting platform
 }
 
-main();
+// For Vercel deployment as serverless function
+export default async function handler(req: any, res: any) {
+  try {
+    await main();
+    res.status(200).json({ message: "Bot executed successfully" });
+  } catch (error) {
+    console.error("Error in handler:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// Uncomment the line below if you want to run locally with polling
+// handleIncomingActions();

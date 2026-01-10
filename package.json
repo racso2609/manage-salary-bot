@@ -3,16 +3,17 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
+   "devDependencies": {
+     "@types/bun": "latest",
+     "@types/node": "^20.0.0"
+   },
   "peerDependencies": {
     "typescript": "^5"
   },
-  "scripts": {
-    "start": "bun run index.ts",
-    "server": "bun run index.ts"
-  },
+   "scripts": {
+     "start": "node --loader ts-node/esm index.ts",
+     "server": "node --loader ts-node/esm index.ts"
+   },
   "dependencies": {
     "@binance/c2c": "^4.1.1",
     "@binance/connector": "^3.6.1",
