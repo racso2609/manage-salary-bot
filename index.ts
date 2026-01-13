@@ -125,7 +125,7 @@ async function getExistingExternalIds(): Promise<Set<string>> {
       },
     });
     if (response.ok) {
-      const data = await response.json() as any[];
+      const data = (await response.json()) as any[];
       // Assuming the API returns records with externalId field
       return new Set(
         data.map((record: any) => record.externalId).filter(Boolean),
@@ -321,7 +321,9 @@ async function handleIncomingActions() {
 
     // Update lastFetchedTimestamp to the latest timestamp from fetched data
     if (allRecords.length > 0) {
-      const maxTimestamp = Math.max(...allRecords.map(r => Date.parse(r.date)));
+      const maxTimestamp = Math.max(
+        ...allRecords.map((r) => Date.parse(r.date)),
+      );
       lastFetchedTimestamp = maxTimestamp;
     }
   }, 60000); // 1 minute
@@ -342,7 +344,7 @@ async function main() {
   // Collect all records to update timestamp
   const allRecords = [...p2p.records, ...deposits, ...pays];
   if (allRecords.length > 0) {
-    const maxTimestamp = Math.max(...allRecords.map(r => Date.parse(r.date)));
+    const maxTimestamp = Math.max(...allRecords.map((r) => Date.parse(r.date)));
     lastFetchedTimestamp = maxTimestamp;
   }
 
@@ -362,4 +364,11 @@ export default async function handler(req: any, res: any) {
 }
 
 // Uncomment the line below if you want to run locally with polling
+// main()
+//   .then(() => {
+//     console.log("Initial run completed");
+//   })
+//   .catch((error) => {
+//     console.error("Error in main:", error);
+//   });
 // handleIncomingActions();
